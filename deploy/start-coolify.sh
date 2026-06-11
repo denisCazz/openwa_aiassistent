@@ -1,12 +1,17 @@
 #!/bin/sh
 set -e
 
-echo "[start] Avvio OpenWA API sulla porta 2785..."
-node /app/dist/main &
+# Coolify imposta PORT=80 per il proxy esterno (nginx).
+# I servizi interni usano porte dedicate — non ereditano PORT.
+API_PORT=2785
+AI_PORT=3100
+
+echo "[start] Avvio OpenWA API sulla porta ${API_PORT}..."
+PORT="${API_PORT}" node /app/dist/main &
 API_PID=$!
 
-echo "[start] Avvio AI Service sulla porta 3100..."
-cd /app/ai-service && node src/index.js &
+echo "[start] Avvio AI Service sulla porta ${AI_PORT}..."
+cd /app/ai-service && PORT="${AI_PORT}" node src/index.js &
 AI_PID=$!
 
 echo "[start] Avvio Nginx sulla porta 80..."
