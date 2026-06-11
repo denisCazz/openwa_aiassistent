@@ -1,6 +1,14 @@
 #!/bin/sh
 set -e
 
+# Dopo restart container: rimuovi lock Chromium lasciati da processi precedenti
+SESSION_DIR="${SESSION_DATA_PATH:-/app/data/sessions}"
+if [ -d "$SESSION_DIR" ]; then
+  find "$SESSION_DIR" \( -name 'SingletonLock' -o -name 'SingletonSocket' -o -name 'SingletonCookie' \) -delete 2>/dev/null || true
+fi
+# Termina eventuali processi Chromium orfani (solo all'avvio container)
+pkill -9 -f '/usr/bin/chromium' 2>/dev/null || true
+
 # Coolify imposta PORT=80 per il proxy esterno (nginx).
 # I servizi interni usano porte dedicate — non ereditano PORT.
 API_PORT=2785

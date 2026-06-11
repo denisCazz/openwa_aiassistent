@@ -31,6 +31,11 @@ import {
 } from '../interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
 import {
+  cleanChromiumProfileLocks,
+  getLocalAuthSessionDir,
+  isChromiumProfileLockError,
+} from '../utils/chromium-profile.util';
+import {
   GroupChat,
   MessageWithReactions,
   BusinessClient,
@@ -70,9 +75,35 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
     this.callbacks = callbacks;
     this.setStatus(EngineStatus.INITIALIZING);
 
+    const profileDir = getLocalAuthSessionDir(this.config.sessionDataPath, this.config.sessionId);
+    cleanChromiumProfileLocks(profileDir);
+
     try {
-      // Build puppeteer args, including proxy if configured
-      const puppeteerArgs = this.config.puppeteer?.args || [
+      await this.launchClient();
+    } catch (error) {
+      if (isChromiumProfileLockError(error)) {
+        this.logger.warn('Chromium profile locked by stale process, cleaning locks and retrying', {
+          sessionId: this.config.sessionId,
+          profileDir,
+        });
+        cleanChromiumProfileLocks(profileDir);
+        try {
+          await this.launchClient();
+          return;
+        } catch (retryError) {
+          this.setStatus(EngineStatus.FAILED);
+          throw retryError;
+        }
+      }
+
+      this.setStatus(EngineStatus.FAILED);
+      throw error;
+    }
+  }
+
+  private async launchClient(): Promise<void> {
+    const puppeteerArgs = [
+      ...(this.config.puppeteer?.args || [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
@@ -80,33 +111,32 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         '--no-first-run',
         '--no-zygote',
         '--disable-gpu',
-      ];
+      ]),
+    ];
 
-      // Add proxy configuration if provided
-      if (this.config.proxy) {
-        puppeteerArgs.push(`--proxy-server=${this.config.proxy.url}`);
-        this.logger.log(
-          `Using proxy: ${this.config.proxy.type}://${this.config.proxy.url.replace(/:[^:@]*@/, ':***@')}`,
-        );
-      }
-
-      this.client = new Client({
-        authStrategy: new LocalAuth({
-          clientId: this.config.sessionId,
-          dataPath: path.resolve(this.config.sessionDataPath),
-        }),
-        puppeteer: {
-          headless: this.config.puppeteer?.headless ?? true,
-          args: puppeteerArgs,
-        },
-      });
-
-      this.setupEventHandlers();
-      await this.client.initialize();
-    } catch (error) {
-      this.setStatus(EngineStatus.FAILED);
-      throw error;
+    if (this.config.proxy) {
+      puppeteerArgs.push(`--proxy-server=${this.config.proxy.url}`);
+      this.logger.log(
+        `Using proxy: ${this.config.proxy.type}://${this.config.proxy.url.replace(/:[^:@]*@/, ':***@')}`,
+      );
     }
+
+    const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+
+    this.client = new Client({
+      authStrategy: new LocalAuth({
+        clientId: this.config.sessionId,
+        dataPath: path.resolve(this.config.sessionDataPath),
+      }),
+      puppeteer: {
+        headless: this.config.puppeteer?.headless ?? true,
+        args: puppeteerArgs,
+        ...(executablePath ? { executablePath } : {}),
+      },
+    });
+
+    this.setupEventHandlers();
+    await this.client.initialize();
   }
 
   private setupEventHandlers(): void {
