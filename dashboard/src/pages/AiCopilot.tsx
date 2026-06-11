@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Bot, Loader2, Copy, Check, MessageSquare, Clock,
   WifiOff, RefreshCw, Sparkles, AlertCircle,
   Search, Users, Smile, Meh, Frown, ListChecks, Zap,
-  Brain, ArrowRight, Hash,
+  Brain, ArrowRight, Hash, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useSessionsQuery, useSessionChatsQuery } from '../hooks/queries';
@@ -275,6 +275,10 @@ export function AiCopilot() {
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [mobileChatsOpen, setMobileChatsOpen] = useState(true);
+  const mainRef = useRef<HTMLElement>(null);
+
+  const showResults = !!(result || analyzing);
 
   useEffect(() => {
     if (!selectedSessionId && readySessions.length > 0) {
@@ -286,7 +290,19 @@ export function AiCopilot() {
     setSelectedChatId('');
     setResult(null);
     setError(null);
+    setMobileChatsOpen(true);
   }, [selectedSessionId]);
+
+  // Su mobile: chiudi lista chat e scrolla ai risultati per evitare sovrapposizioni
+  useEffect(() => {
+    if (!showResults) return;
+    if (window.matchMedia('(max-width: 1024px)').matches) {
+      setMobileChatsOpen(false);
+      requestAnimationFrame(() => {
+        mainRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+  }, [showResults]);
 
   const checkHealth = useCallback(() => {
     setServiceReachable(null);
@@ -358,9 +374,9 @@ export function AiCopilot() {
         <StatusPill ok={serviceReachable} loading={serviceReachable === null} />
       </header>
 
-      <div className="aic-layout">
+      <div className={`aic-layout${showResults ? ' aic-layout--results' : ''}`}>
         {/* ── Sidebar ── */}
-        <aside className="aic-sidebar">
+        <aside className={`aic-sidebar${!mobileChatsOpen ? ' aic-sidebar--collapsed' : ''}`}>
           <div className="aic-sidebar-section">
             <label className="aic-field-label">Sessione</label>
             <select
@@ -385,11 +401,31 @@ export function AiCopilot() {
             <div className="aic-sidebar-section aic-sidebar-chats">
               <div className="aic-chats-head">
                 <label className="aic-field-label">Conversazioni</label>
-                <button className="aic-icon-btn" onClick={() => refetchChats()} disabled={chatsLoading} title="Aggiorna">
-                  <RefreshCw size={14} className={chatsLoading ? 'animate-spin' : ''} />
-                </button>
+                <div className="aic-chats-head-actions">
+                  <button className="aic-icon-btn" onClick={() => refetchChats()} disabled={chatsLoading} title="Aggiorna">
+                    <RefreshCw size={14} className={chatsLoading ? 'animate-spin' : ''} />
+                  </button>
+                  <button
+                    className="aic-icon-btn aic-mobile-toggle"
+                    onClick={() => setMobileChatsOpen(v => !v)}
+                    title={mobileChatsOpen ? 'Chiudi lista' : 'Apri lista'}
+                  >
+                    {mobileChatsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  </button>
+                </div>
               </div>
 
+              {!mobileChatsOpen && selectedChat && (
+                <button className="aic-chat-compact" onClick={() => setMobileChatsOpen(true)}>
+                  <div className={`aic-chat-avatar${selectedChat.isGroup ? ' group' : ''}`}>
+                    {selectedChat.isGroup ? <Users size={15} /> : chatInitials(selectedChat)}
+                  </div>
+                  <span className="aic-chat-compact-name">{chatLabel(selectedChat)}</span>
+                  <span className="aic-chat-compact-change">Cambia</span>
+                </button>
+              )}
+
+              <div className={`aic-chats-panel${mobileChatsOpen ? ' open' : ''}`}>
               <div className="aic-search">
                 <Search size={15} />
                 <input
@@ -433,6 +469,7 @@ export function AiCopilot() {
                   </button>
                 ))}
               </div>
+              </div>
             </div>
           )}
 
@@ -448,7 +485,7 @@ export function AiCopilot() {
         </aside>
 
         {/* ── Main content ── */}
-        <main className="aic-main">
+        <main className="aic-main" ref={mainRef}>
           {error && (
             <div className="aic-alert error">
               <AlertCircle size={16} />
