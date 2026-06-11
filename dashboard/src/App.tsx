@@ -48,7 +48,9 @@ function AppContent() {
       });
       if (response.ok) {
         const data = await response.json();
-        setRole(data.role as UserRole);
+        if (data.valid && data.role) {
+          setRole(data.role as UserRole);
+        }
       }
     } catch {
       // Default to viewer if we can't fetch role

@@ -177,6 +177,18 @@ describe('AuthService', () => {
   // ── validateApiKey ────────────────────────────────────────────────
 
   describe('validateApiKey', () => {
+    it('should accept API_MASTER_KEY from environment', async () => {
+      process.env.API_MASTER_KEY = 'my-master-secret-key';
+
+      const result = await service.validateApiKey('my-master-secret-key');
+
+      expect(result.role).toBe(ApiKeyRole.ADMIN);
+      expect(result.name).toBe('Master API Key');
+      expect(repository.findOne).not.toHaveBeenCalled();
+
+      delete process.env.API_MASTER_KEY;
+    });
+
     it('should return the API key for a valid raw key', async () => {
       const rawKey = 'test-key';
       const key = createMockApiKey({ keyHash: hashKey(rawKey) });

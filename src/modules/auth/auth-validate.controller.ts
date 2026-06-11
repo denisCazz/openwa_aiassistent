@@ -1,6 +1,7 @@
 import { Controller, Post, Headers, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiHeader } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
+import { Public } from './decorators/auth.decorators';
 import { createLogger } from '../../common/services/logger.service';
 
 @ApiTags('auth')
@@ -10,6 +11,7 @@ export class AuthValidateController {
 
   constructor(private readonly authService: AuthService) {}
 
+  @Public()
   @Post('validate')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Validate an API key' })

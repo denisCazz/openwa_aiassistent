@@ -33,11 +33,11 @@ export function Login({ onLogin }: LoginProps) {
         },
       });
 
-      if (response.ok) {
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.valid) {
         onLogin(apiKey);
       } else {
-        const errorData = await response.json().catch(() => ({}));
-        setError(errorData.message || t('login.invalidKey'));
+        setError(data.message || t('login.invalidKey'));
       }
     } catch {
       setError(t('login.connectionError'));

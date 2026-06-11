@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, UnauthorizedException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import { existsSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
@@ -20,28 +20,39 @@ export class AuthService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    // Seed a default API key if none exist
-    const count = await this.apiKeyRepository.count();
+    const masterKey = process.env.API_MASTER_KEY?.trim();
     let displayKey: string;
     let isNewKey = false;
 
-    if (count === 0) {
-      // Use predictable key in development, random key in production
-      displayKey =
-        process.env.NODE_ENV === 'production' ? `owa_k1_${randomBytes(32).toString('hex')}` : 'dev-admin-key';
-
-      await this.seedApiKey(displayKey, 'Default Admin Key', ApiKeyRole.ADMIN);
-      isNewKey = true;
-
-      // Save raw key to file for startup script to read
+    if (masterKey) {
+      const keyHash = this.hashKey(masterKey);
+      const existing = await this.apiKeyRepository.findOne({ where: { keyHash } });
+      if (!existing) {
+        await this.seedApiKey(masterKey, 'Master API Key', ApiKeyRole.ADMIN);
+        isNewKey = true;
+      }
+      displayKey = masterKey;
       try {
-        writeFileSync(API_KEY_FILE, displayKey, 'utf-8');
+        writeFileSync(API_KEY_FILE, masterKey, 'utf-8');
       } catch (err) {
         this.logger.warn('Could not save API key file', { error: String(err) });
       }
     } else {
-      // Read saved API key from file if exists
-      if (existsSync(API_KEY_FILE)) {
+      const count = await this.apiKeyRepository.count();
+
+      if (count === 0) {
+        displayKey =
+          process.env.NODE_ENV === 'production' ? `owa_k1_${randomBytes(32).toString('hex')}` : 'dev-admin-key';
+
+        await this.seedApiKey(displayKey, 'Default Admin Key', ApiKeyRole.ADMIN);
+        isNewKey = true;
+
+        try {
+          writeFileSync(API_KEY_FILE, displayKey, 'utf-8');
+        } catch (err) {
+          this.logger.warn('Could not save API key file', { error: String(err) });
+        }
+      } else if (existsSync(API_KEY_FILE)) {
         try {
           displayKey = readFileSync(API_KEY_FILE, 'utf-8').trim();
         } catch (error) {
@@ -158,6 +169,10 @@ export class AuthService implements OnModuleInit {
   }
 
   async validateApiKey(rawKey: string, clientIp?: string, sessionId?: string): Promise<ApiKey> {
+    if (this.isMasterKey(rawKey)) {
+      return this.buildMasterKeyEntity();
+    }
+
     const keyHash = this.hashKey(rawKey);
     const apiKey = await this.apiKeyRepository.findOne({ where: { keyHash } });
 
@@ -201,6 +216,39 @@ export class AuthService implements OnModuleInit {
 
   private hashKey(rawKey: string): string {
     return createHash('sha256').update(rawKey).digest('hex');
+  }
+
+  private isMasterKey(rawKey: string): boolean {
+    const masterKey = process.env.API_MASTER_KEY?.trim();
+    if (!masterKey) return false;
+
+    try {
+      const provided = Buffer.from(rawKey);
+      const expected = Buffer.from(masterKey);
+      if (provided.length !== expected.length) return false;
+      return timingSafeEqual(provided, expected);
+    } catch {
+      return false;
+    }
+  }
+
+  private buildMasterKeyEntity(): ApiKey {
+    const masterKey = process.env.API_MASTER_KEY!.trim();
+    return {
+      id: 'master-env',
+      name: 'Master API Key',
+      keyHash: this.hashKey(masterKey),
+      keyPrefix: masterKey.substring(0, 12),
+      role: ApiKeyRole.ADMIN,
+      allowedIps: null,
+      allowedSessions: null,
+      isActive: true,
+      expiresAt: null,
+      lastUsedAt: new Date(),
+      usageCount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
   }
 
   private isIpAllowed(clientIp: string, allowedIps: string[]): boolean {
