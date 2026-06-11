@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { SessionService } from '../session/session.service';
@@ -18,6 +18,7 @@ export class MessageService {
   constructor(
     @InjectRepository(Message, 'data')
     private readonly messageRepository: Repository<Message>,
+    @Inject(forwardRef(() => SessionService))
     private readonly sessionService: SessionService,
     private readonly hookManager: HookManager,
   ) {}

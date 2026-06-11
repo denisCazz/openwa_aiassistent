@@ -10,6 +10,27 @@ echo "[start] Avvio OpenWA API sulla porta ${API_PORT}..."
 PORT="${API_PORT}" node /app/dist/main &
 API_PID=$!
 
+echo "[start] Attesa health API..."
+READY=0
+i=0
+while [ "$i" -lt 45 ]; do
+  if wget -qO- "http://127.0.0.1:${API_PORT}/api/health" > /dev/null 2>&1; then
+    READY=1
+    echo "[start] API pronta"
+    break
+  fi
+  if ! kill -0 "$API_PID" 2>/dev/null; then
+    echo "[start] API terminata durante l'avvio"
+    exit 1
+  fi
+  i=$((i + 1))
+  sleep 2
+done
+if [ "$READY" -eq 0 ]; then
+  echo "[start] Timeout avvio API"
+  exit 1
+fi
+
 echo "[start] Avvio AI Service sulla porta ${AI_PORT}..."
 cd /app/ai-service && PORT="${AI_PORT}" node src/index.js &
 AI_PID=$!
