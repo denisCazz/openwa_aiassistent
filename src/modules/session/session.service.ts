@@ -192,9 +192,24 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
 
   async start(id: string): Promise<Session> {
     const session = await this.findOne(id);
+    const existingEngine = this.engines.get(id);
 
-    if (this.engines.has(id)) {
-      throw new BadRequestException('Session is already started');
+    if (existingEngine) {
+      const engineStatus = existingEngine.getStatus();
+      if (engineStatus !== EngineStatus.FAILED && engineStatus !== EngineStatus.DISCONNECTED) {
+        return this.findOne(id);
+      }
+
+      try {
+        await existingEngine.destroy();
+      } catch (error) {
+        this.logger.warn(`Failed to destroy stale engine before restart`, {
+          sessionId: id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      this.engines.delete(id);
+      this.cancelReconnect(id);
     }
 
     // Execute hook before starting
@@ -219,7 +234,28 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       baseDelay: config?.reconnectBaseDelay ?? 5000,
     });
 
-    await this.initializeEngine(id, session);
+    try {
+      await this.initializeEngine(id, session);
+    } catch (error) {
+      const failedEngine = this.engines.get(id);
+      if (failedEngine) {
+        try {
+          await failedEngine.destroy();
+        } catch (destroyError) {
+          this.logger.warn(`Failed to destroy engine after start error`, {
+            sessionId: id,
+            error: destroyError instanceof Error ? destroyError.message : String(destroyError),
+          });
+        }
+        this.engines.delete(id);
+      }
+      this.cancelReconnect(id);
+      await this.updateStatus(id, SessionStatus.FAILED);
+
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      throw new BadRequestException(`Failed to start session: ${message}`);
+    }
+
     return this.findOne(id);
   }
 
@@ -238,16 +274,18 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
     this.engines.set(id, engine);
 
     await engine.initialize({
-      onQRCode: (): void => {
+      onQRCode: (qrCode: string): void => {
         this.logger.log('QR code generated', {
           sessionId: id,
           action: 'qr_generated',
         });
 
+        this.eventsGateway.emitQRCode(id, qrCode);
+
         // Execute hook for QR event
         void this.hookManager.execute(
           'session:qr',
-          { sessionId: id },
+          { sessionId: id, qrCode },
           {
             sessionId: id,
             source: 'Engine',
@@ -458,7 +496,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
     return this.findOne(id);
   }
 
-  async getQRCode(id: string): Promise<{ qrCode: string; status: SessionStatus }> {
+  async getQRCode(id: string): Promise<{ qrCode: string | null; status: SessionStatus; pending: boolean }> {
     const session = await this.findOne(id);
     const engine = this.engines.get(id);
 
@@ -472,12 +510,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
       if (session.status === SessionStatus.READY) {
         throw new BadRequestException('Session is already authenticated, no QR code needed');
       }
-      throw new BadRequestException('QR code is not ready yet. Please wait...');
+      return {
+        qrCode: null,
+        status: session.status,
+        pending: true,
+      };
     }
 
     return {
       qrCode,
       status: session.status,
+      pending: false,
     };
   }
 

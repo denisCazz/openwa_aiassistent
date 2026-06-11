@@ -5,6 +5,7 @@ import { NotFoundException, ConflictException, BadRequestException } from '@nest
 import { SessionService } from './session.service';
 import { Session, SessionStatus } from './entities/session.entity';
 import { EngineFactory } from '../../engine/engine.factory';
+import { EngineStatus } from '../../engine/interfaces/whatsapp-engine.interface';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
@@ -64,6 +65,7 @@ describe('SessionService', () => {
       destroy: jest.fn().mockResolvedValue(undefined),
       disconnect: jest.fn().mockResolvedValue(undefined),
       getQRCode: jest.fn().mockReturnValue(null),
+      getStatus: jest.fn().mockReturnValue(EngineStatus.INITIALIZING),
       getGroups: jest.fn().mockResolvedValue([]),
     };
 
@@ -73,6 +75,7 @@ describe('SessionService', () => {
 
     eventsGateway = {
       emitSessionStatus: jest.fn(),
+      emitQRCode: jest.fn(),
       emitMessage: jest.fn(),
     };
 
@@ -233,14 +236,32 @@ describe('SessionService', () => {
       });
     });
 
-    it('should throw BadRequestException if session already started', async () => {
+    it('should return session if engine is already running', async () => {
       const session = createMockSession();
       (repository.findOne as jest.Mock).mockResolvedValue(session);
       (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
 
       await service.start('sess-uuid-1');
+      mockEngine.getStatus.mockReturnValue(EngineStatus.QR_READY);
 
-      await expect(service.start('sess-uuid-1')).rejects.toThrow(BadRequestException);
+      const result = await service.start('sess-uuid-1');
+
+      expect(result.id).toBe('sess-uuid-1');
+      expect(engineFactory.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('should restart engine if previous attempt failed', async () => {
+      const session = createMockSession();
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      await service.start('sess-uuid-1');
+      mockEngine.getStatus.mockReturnValue(EngineStatus.FAILED);
+
+      await service.start('sess-uuid-1');
+
+      expect(mockEngine.destroy).toHaveBeenCalled();
+      expect(engineFactory.create).toHaveBeenCalledTimes(2);
     });
 
     it('should execute session:starting hook before initializing engine', async () => {
@@ -300,6 +321,20 @@ describe('SessionService', () => {
       const result = await service.getQRCode('sess-uuid-1');
 
       expect(result.qrCode).toBe('data:image/png;base64,iVBOR...');
+    });
+
+    it('should return pending response when QR is not ready yet', async () => {
+      const session = createMockSession({ status: SessionStatus.INITIALIZING });
+      (repository.findOne as jest.Mock).mockResolvedValue(session);
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+
+      await service.start('sess-uuid-1');
+      mockEngine.getQRCode.mockReturnValue(null);
+
+      const result = await service.getQRCode('sess-uuid-1');
+
+      expect(result.qrCode).toBeNull();
+      expect(result.pending).toBe(true);
     });
 
     it('should throw if session is READY (already authenticated)', async () => {

@@ -153,8 +153,13 @@
       "errorTitle": "המחיקה נכשלה",
       "errorDefault": "מחיקת ה-Session נכשלה"
     },
+    "start": {
+      "errorTitle": "הפעלת ה-Session נכשלה",
+      "errorDefault": "לא ניתן להפעיל את ה-Session. יש לבדוק את לוגי השרת."
+    },
     "qr": {
       "title": "סריקת QR",
+      "errorTitle": "קוד QR לא זמין",
       "step1": "<strong>1.</strong> יש לפתוח את WhatsApp במכשיר",
       "step2": "<strong>2.</strong> יש להקיש על <strong>תפריט</strong> ← <strong>מכשירים מקושרים</strong>",
       "step3": "<strong>3.</strong> יש להקיש על <strong>קישור מכשיר</strong> ולסרוק את ה-QR",

@@ -153,8 +153,13 @@
       "errorTitle": "Delete Failed",
       "errorDefault": "Failed to delete session"
     },
+    "start": {
+      "errorTitle": "Failed to start session",
+      "errorDefault": "Could not start the WhatsApp session. Check server logs."
+    },
     "qr": {
       "title": "Scan QR Code",
+      "errorTitle": "QR code unavailable",
       "step1": "<strong>1.</strong> Open WhatsApp on your phone",
       "step2": "<strong>2.</strong> Tap <strong>Menu</strong> → <strong>Linked Devices</strong>",
       "step3": "<strong>3.</strong> Tap <strong>Link a Device</strong> and scan this QR",

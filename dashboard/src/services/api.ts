@@ -10,7 +10,7 @@ const API_BASE_URL = '/api';
 export interface Session {
   id: string;
   name: string;
-  status: 'created' | 'idle' | 'initializing' | 'connecting' | 'qr_ready' | 'ready' | 'disconnected';
+  status: 'created' | 'idle' | 'initializing' | 'connecting' | 'qr_ready' | 'authenticating' | 'ready' | 'disconnected' | 'failed';
   phone?: string;
   pushName?: string;
   lastActive?: string;
@@ -186,7 +186,8 @@ export const sessionApi = {
   delete: (id: string) => request<void>(`/sessions/${id}`, { method: 'DELETE' }),
   start: (id: string) => request<Session>(`/sessions/${id}/start`, { method: 'POST' }),
   stop: (id: string) => request<Session>(`/sessions/${id}/stop`, { method: 'POST' }),
-  getQR: (id: string) => request<{ qrCode: string; status: string }>(`/sessions/${id}/qr`),
+  getQR: (id: string) =>
+    request<{ qrCode: string | null; status: string; pending?: boolean }>(`/sessions/${id}/qr`),
   getStats: () => request<SessionStats>('/sessions/stats/overview'),
   getGroups: (id: string) => request<{ id: string; name: string }[]>(`/sessions/${id}/groups`),
 };
