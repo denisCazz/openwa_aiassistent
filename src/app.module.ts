@@ -15,6 +15,7 @@ import { SettingsModule } from './modules/settings/settings.module';
 import { InfraModule } from './modules/infra/infra.module';
 import { EventsModule } from './modules/events/events.module';
 import { ContactModule } from './modules/contact/contact.module';
+import { ChatModule } from './modules/chat/chat.module';
 import { GroupModule } from './modules/group/group.module';
 import { LabelModule } from './modules/label/label.module';
 import { ChannelModule } from './modules/channel/channel.module';
@@ -152,6 +153,7 @@ if (process.env.QUEUE_ENABLED === 'true') {
     SettingsModule,
     InfraModule,
     ContactModule,
+    ChatModule,
     GroupModule,
     LabelModule, // Phase 3: Labels Management
     ChannelModule, // Phase 3: Channels/Newsletter

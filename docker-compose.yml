@@ -97,6 +97,43 @@ services:
       - 'com.openwa.service=api'
       - 'com.openwa.core=true'
 
+  # ===== CORE: AI Copilot Service =====
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: openwa-ai
+    restart: unless-stopped
+    expose:
+      - '3100'
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:?OPENAI_API_KEY is required}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - OPENWA_BASE_URL=http://openwa-api:2785
+      - OPENWA_API_KEY=${API_MASTER_KEY:-}
+      - PORT=3100
+      - HISTORY_LIMIT=${HISTORY_LIMIT:-30}
+      - REPLY_LANGUAGE=${REPLY_LANGUAGE:-italiano}
+      - SYSTEM_PROMPT_EXTRA=${SYSTEM_PROMPT_EXTRA:-}
+    depends_on:
+      openwa-api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'wget',
+          '-qO-',
+          'http://localhost:3100/health',
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    labels:
+      - 'com.openwa.service=ai'
+      - 'com.openwa.core=true'
+
   # ===== CORE: Dashboard Frontend =====
   dashboard:
     build:
@@ -108,7 +145,10 @@ services:
     expose:
       - '80'
     depends_on:
-      - openwa-api
+      openwa-api:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
     labels:
       - 'com.openwa.service=dashboard'
       - 'com.openwa.core=true'

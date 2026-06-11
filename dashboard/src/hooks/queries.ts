@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   sessionApi,
+  chatApi,
   webhookApi,
   apiKeyApi,
   auditApi,
@@ -15,6 +16,7 @@ export const queryKeys = {
   sessions: ['sessions'] as const,
   sessionStats: ['sessions', 'stats'] as const,
   sessionGroups: (sessionId: string) => ['sessions', sessionId, 'groups'] as const,
+  sessionChats: (sessionId: string) => ['sessions', sessionId, 'chats'] as const,
   webhooks: ['webhooks'] as const,
   apiKeys: ['apiKeys'] as const,
   logs: (params: { severity?: string; page: number; limit: number }) =>
@@ -49,6 +51,15 @@ export function useSessionGroupsQuery(sessionId: string, enabled: boolean) {
     queryFn: () => sessionApi.getGroups(sessionId),
     enabled: enabled && !!sessionId,
     staleTime: 60_000,
+  });
+}
+
+export function useSessionChatsQuery(sessionId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.sessionChats(sessionId),
+    queryFn: () => chatApi.list(sessionId),
+    enabled: enabled && !!sessionId,
+    staleTime: 30_000,
   });
 }
 

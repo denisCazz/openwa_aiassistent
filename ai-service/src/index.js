@@ -9,21 +9,19 @@ dotenv.config({ path: resolve(__dirname, '../.env') });
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
-import { generateSuggestion } from './ai.js';
+import { generateSuggestion, analyzeConversation } from './ai.js';
 
 const PORT = parseInt(process.env.PORT || '3100', 10);
 
 const app = express();
 app.use(express.json());
 
-// CORS — allow the dashboard (any localhost origin in dev)
+// CORS — allow dashboard origins (dev + production behind reverse proxy)
 app.use((req, res, next) => {
   const origin = req.headers.origin || '';
-  if (!origin || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
-    res.setHeader('Access-Control-Allow-Origin', origin || '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  }
+  res.setHeader('Access-Control-Allow-Origin', origin || '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
@@ -125,6 +123,55 @@ app.get('/suggestions', (req, res) => {
 });
 
 /**
+ * POST /analyze
+ * Analyze a conversation: recap, sentiment, recommended actions.
+ * Body: { sessionId, chatId, limit?: number }
+ */
+app.post('/analyze', async (req, res) => {
+  const { sessionId, chatId, limit } = req.body;
+
+  if (!sessionId || !chatId) {
+    return res.status(400).json({ error: 'sessionId and chatId are required' });
+  }
+
+  const parsedLimit = limit ? Math.min(parseInt(limit, 10), 100) : undefined;
+
+  broadcast('processing', {
+    sessionId,
+    chatId,
+    from: chatId,
+    body: 'Analisi conversazione in corso…',
+    startedAt: new Date().toISOString(),
+  });
+
+  try {
+    const result = await analyzeConversation(sessionId, chatId, parsedLimit);
+    addToStore({
+      ...result,
+      suggestion: result.analysis?.recap || JSON.stringify(result.analysis),
+      historyCount: result.messageCount,
+      triggerMessage: { from: chatId, body: '', type: 'analysis' },
+    });
+    broadcast('analysis', result);
+    broadcast('suggestion', {
+      sessionId: result.sessionId,
+      chatId: result.chatId,
+      triggerMessage: { from: result.chatId, body: 'Analisi manuale', type: 'analysis' },
+      historyCount: result.messageCount,
+      suggestion: result.analysis?.recap || '',
+      model: result.model,
+      generatedAt: result.generatedAt,
+      analysis: result.analysis,
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('[AI] Analysis error:', err.message);
+    broadcast('error', { sessionId, chatId, error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * POST /suggest
  * On-demand: trigger a suggestion for a specific chat without waiting for a new message.
  * Body: { sessionId, chatId, message: { body, from, type } }
@@ -166,6 +213,7 @@ httpServer.listen(PORT, () => {
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('  🤖 OpenWA AI Service avviato');
   console.log(`  📡 Webhook:     http://localhost:${PORT}/webhook`);
+  console.log(`  🔍 Analisi:       http://localhost:${PORT}/analyze`);
   console.log(`  💡 Suggerimenti: http://localhost:${PORT}/suggestions`);
   console.log(`  🔌 WebSocket:   ws://localhost:${PORT}`);
   console.log(`  ❤️  Health:      http://localhost:${PORT}/health`);

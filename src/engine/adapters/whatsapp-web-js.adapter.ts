@@ -11,6 +11,8 @@ import {
   IncomingMessage,
   Contact,
   Group,
+  ChatSummary,
+  ChatHistoryMessage,
   GroupInfo,
   GroupParticipant,
   LocationInput,
@@ -378,6 +380,48 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
         ),
       };
     });
+  }
+
+  async getChats(): Promise<ChatSummary[]> {
+    this.ensureReady();
+    const chats = await this.client!.getChats();
+
+    return chats
+      .map(chat => ({
+        id: chat.id._serialized,
+        name: chat.name || chat.id.user || chat.id._serialized,
+        isGroup: chat.isGroup,
+        unreadCount: chat.unreadCount,
+        timestamp: chat.timestamp,
+        lastMessage: chat.lastMessage
+          ? {
+              body: chat.lastMessage.body || `[${chat.lastMessage.type}]`,
+              timestamp: chat.lastMessage.timestamp,
+              fromMe: chat.lastMessage.fromMe,
+            }
+          : undefined,
+      }))
+      .sort((a, b) => b.timestamp - a.timestamp);
+  }
+
+  async getChatMessages(chatId: string, limit: number = 50): Promise<ChatHistoryMessage[]> {
+    this.ensureReady();
+    const chat = await this.client!.getChatById(chatId);
+    const messages = await chat.fetchMessages({ limit });
+
+    return messages
+      .map(msg => ({
+        id: msg.id._serialized,
+        chatId,
+        from: msg.from,
+        to: msg.to || chatId,
+        body: msg.body || (msg.hasMedia ? `[${msg.type}]` : ''),
+        type: msg.type,
+        timestamp: msg.timestamp,
+        fromMe: msg.fromMe,
+        direction: msg.fromMe ? ('outgoing' as const) : ('incoming' as const),
+      }))
+      .sort((a, b) => a.timestamp - b.timestamp);
   }
 
   // ============= Phase 3: Extended Messaging =============

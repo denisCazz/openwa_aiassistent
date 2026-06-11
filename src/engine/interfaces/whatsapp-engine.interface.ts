@@ -60,6 +60,31 @@ export interface Group {
   isAdmin?: boolean;
 }
 
+export interface ChatSummary {
+  id: string;
+  name: string;
+  isGroup: boolean;
+  unreadCount: number;
+  timestamp: number;
+  lastMessage?: {
+    body: string;
+    timestamp: number;
+    fromMe: boolean;
+  };
+}
+
+export interface ChatHistoryMessage {
+  id: string;
+  chatId: string;
+  from: string;
+  to: string;
+  body: string;
+  type: string;
+  timestamp: number;
+  fromMe: boolean;
+  direction: 'incoming' | 'outgoing';
+}
+
 export interface GroupParticipant {
   id: string;
   number: string;
@@ -243,6 +268,10 @@ export interface IWhatsAppEngine {
 
   // Groups - Basic
   getGroups(): Promise<Group[]>;
+
+  // Chats & history
+  getChats(): Promise<ChatSummary[]>;
+  getChatMessages(chatId: string, limit?: number): Promise<ChatHistoryMessage[]>;
 
   // Groups - Extended (Phase 3)
   getGroupInfo(groupId: string): Promise<GroupInfo | null>;
