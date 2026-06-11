@@ -61,6 +61,7 @@
     "messageTester": "Message Tester",
     "infrastructure": "Infrastructure",
     "plugins": "Plugins",
+    "aiCopilot": "AI Copilot",
     "logs": "Logs"
   },
   "errorBoundary": {

@@ -1,0 +1,18 @@
+{
+  "name": "openwa-ai-service",
+  "version": "0.1.0",
+  "description": "AI Copilot service for OpenWA - GPT-powered reply suggestions",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "openai": "^4.104.0",
+    "ws": "^8.18.2",
+    "dotenv": "^16.5.0",
+    "node-fetch": "^3.3.2"
+  }
+}

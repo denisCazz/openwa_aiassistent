@@ -61,6 +61,7 @@
     "messageTester": "בדיקת הודעות",
     "infrastructure": "תשתית",
     "plugins": "תוספים",
+    "aiCopilot": "AI Copilot",
     "logs": "לוגים"
   },
   "errorBoundary": {
