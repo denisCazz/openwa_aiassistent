@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Bot, Loader2, Copy, Check, MessageSquare, Clock,
-  Wifi, WifiOff, RefreshCw, User, Sparkles, AlertCircle,
-  Search, Users, Smile, Meh, Frown, ListChecks, ChevronRight,
+  WifiOff, RefreshCw, Sparkles, AlertCircle,
+  Search, Users, Smile, Meh, Frown, ListChecks, Zap,
+  Brain, ArrowRight, Hash,
 } from 'lucide-react';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useSessionsQuery, useSessionChatsQuery } from '../hooks/queries';
-import { PageHeader } from '../components/PageHeader';
 import type { ChatSummary } from '../services/api';
 import './AiCopilot.css';
 
@@ -49,8 +49,6 @@ interface AnalysisResult {
   generatedAt: string;
 }
 
-// ─── Config ───────────────────────────────────────────────────────────────────
-
 const AI_PATH_PREFIX = import.meta.env.VITE_AI_SERVICE_URL || '/ai';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -67,7 +65,7 @@ function formatDate(iso: string) {
 }
 
 function formatPhone(chatId: string) {
-  if (chatId.endsWith('@g.us')) return chatId.replace('@g.us', ' (gruppo)');
+  if (chatId.endsWith('@g.us')) return chatId.replace('@g.us', '');
   return '+' + chatId.replace('@c.us', '');
 }
 
@@ -76,10 +74,10 @@ function chatLabel(chat: ChatSummary) {
   return formatPhone(chat.id);
 }
 
-function sentimentIcon(label: string) {
-  if (/positiv/i.test(label)) return <Smile size={16} />;
-  if (/negativ/i.test(label)) return <Frown size={16} />;
-  return <Meh size={16} />;
+function chatInitials(chat: ChatSummary) {
+  const label = chatLabel(chat);
+  if (chat.isGroup) return label.slice(0, 2).toUpperCase();
+  return label.replace(/\D/g, '').slice(-2) || '??';
 }
 
 function sentimentClass(label: string) {
@@ -95,9 +93,51 @@ function urgencyClass(u: string) {
   return 'low';
 }
 
-// ─── Analysis Result Card ─────────────────────────────────────────────────────
+function sentimentEmoji(label: string) {
+  if (/positiv/i.test(label)) return <Smile size={20} />;
+  if (/negativ/i.test(label)) return <Frown size={20} />;
+  return <Meh size={20} />;
+}
 
-function AnalysisCard({ result, chatName }: { result: AnalysisResult; chatName: string }) {
+function scoreToPercent(score: number) {
+  return Math.round(((score + 1) / 2) * 100);
+}
+
+// ─── Sub-components ──────────────────────────────────────────────────────────
+
+function StatusPill({ ok, loading }: { ok: boolean | null; loading?: boolean }) {
+  if (loading || ok === null) {
+    return <span className="aic-pill aic-pill-loading"><Loader2 size={12} className="animate-spin" /> Connessione…</span>;
+  }
+  return ok
+    ? <span className="aic-pill aic-pill-ok"><span className="aic-pill-dot" /> AI attivo</span>
+    : <span className="aic-pill aic-pill-error"><WifiOff size={12} /> Offline</span>;
+}
+
+function SentimentMeter({ sentiment }: { sentiment: Sentiment }) {
+  const pct = scoreToPercent(sentiment.score);
+  const cls = sentimentClass(sentiment.label);
+
+  return (
+    <div className={`aic-meter aic-meter-${cls}`}>
+      <div className="aic-meter-icon">{sentimentEmoji(sentiment.label)}</div>
+      <div className="aic-meter-body">
+        <div className="aic-meter-top">
+          <span className="aic-meter-label">{sentiment.label}</span>
+          <span className="aic-meter-score">
+            {sentiment.score > 0 ? '+' : ''}{sentiment.score.toFixed(2)}
+          </span>
+        </div>
+        <div className="aic-meter-track">
+          <div className="aic-meter-fill" style={{ width: `${pct}%` }} />
+        </div>
+        <p className="aic-meter-rationale">{sentiment.rationale}</p>
+      </div>
+    </div>
+  );
+}
+
+function AnalysisPanel({ result, chatName }: { result: AnalysisResult; chatName: string }) {
   const [copied, setCopied] = useState<string | null>(null);
   const { analysis } = result;
 
@@ -109,114 +149,108 @@ function AnalysisCard({ result, chatName }: { result: AnalysisResult; chatName: 
   };
 
   return (
-    <div className="aic-card aic-analysis-card">
-      <div className="aic-card-header">
-        <div className="aic-avatar"><User size={14} /></div>
-        <div className="aic-card-info">
-          <span className="aic-phone">{chatName}</span>
-          <span className="aic-meta">
-            <BookOpenIcon count={result.messageCount} />
-            <span className="aic-dot" />
-            <Clock size={11} /> {formatDate(result.generatedAt)}
-          </span>
+    <div className="aic-results">
+      {/* Result header */}
+      <div className="aic-results-header">
+        <div className="aic-results-avatar">{chatName.slice(0, 2).toUpperCase()}</div>
+        <div className="aic-results-title">
+          <h2>{chatName}</h2>
+          <p>
+            <MessageSquare size={13} /> {result.messageCount} messaggi
+            <span className="aic-sep">·</span>
+            <Clock size={13} /> {formatDate(result.generatedAt)}
+            <span className="aic-sep">·</span>
+            <Brain size={13} /> {result.model}
+          </p>
         </div>
         {analysis.priority && (
-          <span className={`aic-priority aic-priority-${urgencyClass(analysis.priority)}`}>
-            {analysis.priority}
+          <span className={`aic-badge aic-badge-${urgencyClass(analysis.priority)}`}>
+            Priorità {analysis.priority}
           </span>
         )}
       </div>
 
-      <div className="aic-body">
-        {/* Sentiment */}
-        {analysis.sentiment && (
-          <div className={`aic-sentiment aic-sentiment-${sentimentClass(analysis.sentiment.label)}`}>
-            <div className="aic-sentiment-header">
-              {sentimentIcon(analysis.sentiment.label)}
-              <span className="aic-sentiment-label">Sentiment: {analysis.sentiment.label}</span>
-              <span className="aic-sentiment-score">
-                {analysis.sentiment.score > 0 ? '+' : ''}{analysis.sentiment.score.toFixed(2)}
-              </span>
-            </div>
-            <p className="aic-sentiment-rationale">{analysis.sentiment.rationale}</p>
-          </div>
-        )}
+      <div className="aic-results-grid">
+        {/* Left column: sentiment + recap */}
+        <div className="aic-results-main">
+          {analysis.sentiment && <SentimentMeter sentiment={analysis.sentiment} />}
 
-        {/* Recap */}
-        <div className="aic-section aic-section-analysis">
-          <div className="aic-section-title"><Sparkles size={12} /> Recap conversazione</div>
-          <p className="aic-analysis-text">{analysis.recap}</p>
-          {analysis.conversationStage && (
-            <p className="aic-stage">Fase: <strong>{analysis.conversationStage}</strong></p>
-          )}
+          <div className="aic-panel">
+            <div className="aic-panel-head">
+              <Sparkles size={15} />
+              <h3>Recap conversazione</h3>
+            </div>
+            <p className="aic-recap-text">{analysis.recap}</p>
+            {analysis.conversationStage && (
+              <div className="aic-stage-chip">
+                <Zap size={13} /> Fase: {analysis.conversationStage}
+              </div>
+            )}
+            {analysis.keyTopics && analysis.keyTopics.length > 0 && (
+              <div className="aic-topics">
+                {analysis.keyTopics.map((t, i) => (
+                  <span key={i} className="aic-topic"><Hash size={11} />{t}</span>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Key topics */}
-        {analysis.keyTopics && analysis.keyTopics.length > 0 && (
-          <div className="aic-topics">
-            {analysis.keyTopics.map((t, i) => (
-              <span key={i} className="aic-topic-tag">{t}</span>
-            ))}
-          </div>
-        )}
-
-        {/* Recommended actions */}
+        {/* Right column: actions */}
         {analysis.recommendedActions?.length > 0 && (
-          <div className="aic-section">
-            <div className="aic-section-title"><ListChecks size={12} /> Azioni consigliate</div>
-            <div className="aic-actions">
-              {analysis.recommendedActions.map((act, i) => (
-                <div key={i} className="aic-action">
-                  <div className="aic-action-top">
-                    <ChevronRight size={14} />
-                    <span className="aic-action-text">{act.action}</span>
-                    <span className={`aic-urgency aic-urgency-${urgencyClass(act.urgency)}`}>
-                      {act.urgency}
-                    </span>
-                  </div>
-                  <p className="aic-action-reason">{act.reason}</p>
-                </div>
-              ))}
+          <div className="aic-panel aic-panel-actions">
+            <div className="aic-panel-head">
+              <ListChecks size={15} />
+              <h3>Azioni consigliate</h3>
             </div>
-          </div>
-        )}
-
-        {/* Suggested replies */}
-        {analysis.suggestedReplies && analysis.suggestedReplies.length > 0 && (
-          <div className="aic-section">
-            <div className="aic-section-title"><MessageSquare size={12} /> Risposte suggerite</div>
-            <div className="aic-options">
-              {analysis.suggestedReplies.map((opt, i) => (
-                <div key={i} className="aic-option">
-                  <div className="aic-option-top">
-                    <span className="aic-option-num">{i + 1}</span>
-                    <span className="aic-option-label">{opt.label}</span>
-                    <button
-                      className={`aic-copy-btn${copied === `reply-${i}` ? ' copied' : ''}`}
-                      onClick={() => handleCopy(opt.text, `reply-${i}`)}
-                    >
-                      {copied === `reply-${i}`
-                        ? <><Check size={11} /> Copiato</>
-                        : <><Copy size={11} /> Copia</>}
-                    </button>
+            <div className="aic-timeline">
+              {analysis.recommendedActions.map((act, i) => (
+                <div key={i} className="aic-timeline-item">
+                  <div className="aic-timeline-dot" />
+                  <div className="aic-timeline-content">
+                    <div className="aic-timeline-top">
+                      <span>{act.action}</span>
+                      <span className={`aic-badge aic-badge-sm aic-badge-${urgencyClass(act.urgency)}`}>
+                        {act.urgency}
+                      </span>
+                    </div>
+                    <p>{act.reason}</p>
                   </div>
-                  {opt.text && <blockquote className="aic-reply">"{opt.text}"</blockquote>}
-                  {opt.strategy && <p className="aic-strategy">💡 {opt.strategy}</p>}
                 </div>
               ))}
             </div>
           </div>
         )}
       </div>
-    </div>
-  );
-}
 
-function BookOpenIcon({ count }: { count: number }) {
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-      <MessageSquare size={11} /> {count} messaggi analizzati
-    </span>
+      {/* Suggested replies */}
+      {analysis.suggestedReplies && analysis.suggestedReplies.length > 0 && (
+        <div className="aic-panel aic-panel-replies">
+          <div className="aic-panel-head">
+            <MessageSquare size={15} />
+            <h3>Risposte suggerite</h3>
+          </div>
+          <div className="aic-replies-grid">
+            {analysis.suggestedReplies.map((opt, i) => (
+              <div key={i} className="aic-reply-card">
+                <div className="aic-reply-card-head">
+                  <span className="aic-reply-num">{i + 1}</span>
+                  <span className="aic-reply-label">{opt.label}</span>
+                  <button
+                    className={`aic-copy${copied === `r-${i}` ? ' copied' : ''}`}
+                    onClick={() => handleCopy(opt.text, `r-${i}`)}
+                  >
+                    {copied === `r-${i}` ? <><Check size={13} /> Copiato</> : <><Copy size={13} /> Copia</>}
+                  </button>
+                </div>
+                {opt.text && <blockquote>"{opt.text}"</blockquote>}
+                {opt.strategy && <p className="aic-reply-tip"><Sparkles size={11} /> {opt.strategy}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -273,6 +307,7 @@ export function AiCopilot() {
   });
 
   const selectedChat = chats.find(c => c.id === selectedChatId);
+  const selectedSession = sessions.find(s => s.id === selectedSessionId);
 
   const handleAnalyze = async () => {
     if (!selectedSessionId || !selectedChatId) return;
@@ -299,12 +334,11 @@ export function AiCopilot() {
   if (serviceReachable === false) {
     return (
       <div className="aic-page">
-        <PageHeader title="AI Copilot" subtitle="Analisi conversazioni WhatsApp con recap, sentiment e azioni consigliate" />
-        <div className="aic-center-state">
-          <div className="aic-offline-icon"><WifiOff size={28} /></div>
-          <h3>Servizio AI non raggiungibile</h3>
-          <p>Il servizio AI non risponde. Verifica che il container <code>ai-service</code> sia avviato.</p>
-          <button className="aic-btn-primary" onClick={checkHealth}><RefreshCw size={13} /> Riprova</button>
+        <div className="aic-offline">
+          <div className="aic-offline-icon"><WifiOff size={32} /></div>
+          <h2>Servizio AI non raggiungibile</h2>
+          <p>Verifica che il container <code>ai-service</code> sia avviato e raggiungibile.</p>
+          <button className="aic-btn" onClick={checkHealth}><RefreshCw size={15} /> Riprova connessione</button>
         </div>
       </div>
     );
@@ -312,141 +346,158 @@ export function AiCopilot() {
 
   return (
     <div className="aic-page">
-      <PageHeader title="AI Copilot" subtitle="Seleziona una conversazione e analizza gli ultimi 30 messaggi" />
-
-      <div className="aic-statusbar">
-        <span className={`aic-dot-status aic-dot-${serviceReachable ? 'connected' : 'connecting'}`} />
-        <span className="aic-ws-label">
-          {serviceReachable ? 'AI Service attivo' : 'Connessione…'}
-        </span>
-        <span className="aic-statusbar-sep" />
-        <Wifi size={11} /> <span>Analisi su richiesta</span>
-      </div>
-
-      {/* Selectors */}
-      <div className="aic-selectors">
-        <div className="aic-selector-group">
-          <label className="aic-label">Sessione WhatsApp</label>
-          <select
-            className="aic-select"
-            value={selectedSessionId}
-            onChange={e => setSelectedSessionId(e.target.value)}
-            disabled={sessionsLoading}
-          >
-            <option value="">— Seleziona sessione —</option>
-            {readySessions.map(s => (
-              <option key={s.id} value={s.id}>
-                {s.name} {s.phone ? `(${s.phone})` : ''}
-              </option>
-            ))}
-          </select>
-          {readySessions.length === 0 && !sessionsLoading && (
-            <p className="aic-hint-inline"><AlertCircle size={12} /> Nessuna sessione attiva. Avvia una sessione prima.</p>
-          )}
+      {/* Hero header */}
+      <header className="aic-hero">
+        <div className="aic-hero-text">
+          <div className="aic-hero-icon"><Bot size={22} /></div>
+          <div>
+            <h1>AI Copilot</h1>
+            <p>Analizza le conversazioni WhatsApp — recap, sentiment e azioni consigliate</p>
+          </div>
         </div>
+        <StatusPill ok={serviceReachable} loading={serviceReachable === null} />
+      </header>
 
-        {selectedSessionId && (
-          <div className="aic-selector-group aic-selector-chat">
-            <div className="aic-chat-header">
-              <label className="aic-label">Conversazione</label>
-              <button className="aic-refresh-btn" onClick={() => refetchChats()} disabled={chatsLoading}>
-                <RefreshCw size={12} className={chatsLoading ? 'animate-spin' : ''} />
+      <div className="aic-layout">
+        {/* ── Sidebar ── */}
+        <aside className="aic-sidebar">
+          <div className="aic-sidebar-section">
+            <label className="aic-field-label">Sessione</label>
+            <select
+              className="aic-select"
+              value={selectedSessionId}
+              onChange={e => setSelectedSessionId(e.target.value)}
+              disabled={sessionsLoading}
+            >
+              <option value="">Seleziona sessione…</option>
+              {readySessions.map(s => (
+                <option key={s.id} value={s.id}>
+                  {s.name}{s.phone ? ` · ${s.phone}` : ''}
+                </option>
+              ))}
+            </select>
+            {readySessions.length === 0 && !sessionsLoading && (
+              <p className="aic-warn"><AlertCircle size={13} /> Nessuna sessione attiva</p>
+            )}
+          </div>
+
+          {selectedSessionId && (
+            <div className="aic-sidebar-section aic-sidebar-chats">
+              <div className="aic-chats-head">
+                <label className="aic-field-label">Conversazioni</label>
+                <button className="aic-icon-btn" onClick={() => refetchChats()} disabled={chatsLoading} title="Aggiorna">
+                  <RefreshCw size={14} className={chatsLoading ? 'animate-spin' : ''} />
+                </button>
+              </div>
+
+              <div className="aic-search">
+                <Search size={15} />
+                <input
+                  type="text"
+                  placeholder="Cerca nome o messaggio…"
+                  value={chatSearch}
+                  onChange={e => setChatSearch(e.target.value)}
+                />
+              </div>
+
+              <div className="aic-chats">
+                {chatsLoading && (
+                  <div className="aic-chats-state">
+                    <Loader2 size={20} className="animate-spin" />
+                    <span>Caricamento chat…</span>
+                  </div>
+                )}
+                {!chatsLoading && filteredChats.length === 0 && (
+                  <div className="aic-chats-state muted">Nessuna conversazione</div>
+                )}
+                {filteredChats.map(chat => (
+                  <button
+                    key={chat.id}
+                    className={`aic-chat${selectedChatId === chat.id ? ' active' : ''}`}
+                    onClick={() => setSelectedChatId(chat.id)}
+                  >
+                    <div className={`aic-chat-avatar${chat.isGroup ? ' group' : ''}`}>
+                      {chat.isGroup ? <Users size={15} /> : chatInitials(chat)}
+                    </div>
+                    <div className="aic-chat-body">
+                      <div className="aic-chat-top">
+                        <span className="aic-chat-name">{chatLabel(chat)}</span>
+                        {chat.unreadCount > 0 && <span className="aic-chat-badge">{chat.unreadCount}</span>}
+                      </div>
+                      {chat.lastMessage && (
+                        <span className="aic-chat-preview">
+                          {chat.lastMessage.fromMe ? 'Tu: ' : ''}{chat.lastMessage.body?.slice(0, 55)}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {selectedChatId && (
+            <div className="aic-sidebar-footer">
+              <button className="aic-btn aic-btn-analyze" onClick={handleAnalyze} disabled={analyzing}>
+                {analyzing
+                  ? <><Loader2 size={16} className="animate-spin" /> Analisi in corso…</>
+                  : <><Sparkles size={16} /> Analizza 30 messaggi</>}
               </button>
             </div>
-            <div className="aic-search">
-              <Search size={14} />
-              <input
-                type="text"
-                placeholder="Cerca conversazione…"
-                value={chatSearch}
-                onChange={e => setChatSearch(e.target.value)}
-              />
-            </div>
-            <div className="aic-chat-list">
-              {chatsLoading && (
-                <div className="aic-chat-loading"><Loader2 size={16} className="animate-spin" /> Caricamento…</div>
-              )}
-              {!chatsLoading && filteredChats.length === 0 && (
-                <p className="aic-chat-empty">Nessuna conversazione trovata</p>
-              )}
-              {filteredChats.map(chat => (
-                <button
-                  key={chat.id}
-                  className={`aic-chat-item${selectedChatId === chat.id ? ' selected' : ''}`}
-                  onClick={() => setSelectedChatId(chat.id)}
-                >
-                  <div className="aic-chat-item-icon">
-                    {chat.isGroup ? <Users size={14} /> : <User size={14} />}
-                  </div>
-                  <div className="aic-chat-item-info">
-                    <span className="aic-chat-item-name">{chatLabel(chat)}</span>
-                    {chat.lastMessage && (
-                      <span className="aic-chat-item-preview">
-                        {chat.lastMessage.fromMe ? 'Tu: ' : ''}{chat.lastMessage.body?.slice(0, 60)}
-                      </span>
-                    )}
-                  </div>
-                  {chat.unreadCount > 0 && (
-                    <span className="aic-chat-unread">{chat.unreadCount}</span>
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Analyze button */}
-      {selectedSessionId && selectedChatId && (
-        <div className="aic-analyze-bar">
-          <button
-            className="aic-btn-primary aic-btn-analyze"
-            onClick={handleAnalyze}
-            disabled={analyzing}
-          >
-            {analyzing
-              ? <><Loader2 size={14} className="animate-spin" /> Analisi in corso…</>
-              : <><Bot size={14} /> Analizza ultimi 30 messaggi</>}
-          </button>
-          {selectedChat && (
-            <span className="aic-analyze-target">
-              {chatLabel(selectedChat)}
-            </span>
           )}
-        </div>
-      )}
+        </aside>
 
-      {error && (
-        <div className="aic-error-banner">
-          <AlertCircle size={14} />
-          <span>{error}</span>
-        </div>
-      )}
+        {/* ── Main content ── */}
+        <main className="aic-main">
+          {error && (
+            <div className="aic-alert error">
+              <AlertCircle size={16} />
+              <span>{error}</span>
+            </div>
+          )}
 
-      {analyzing && (
-        <div className="aic-banner">
-          <Loader2 size={13} className="animate-spin" />
-          <div>
-            <strong>Analisi in corso</strong> · {selectedChat ? chatLabel(selectedChat) : selectedChatId}
-            <span className="aic-banner-body"> Recupero cronologia e generazione recap…</span>
-          </div>
-        </div>
-      )}
+          {analyzing && (
+            <div className="aic-analyzing">
+              <div className="aic-analyzing-ring">
+                <Loader2 size={36} className="animate-spin" />
+              </div>
+              <h3>Analisi in corso</h3>
+              <p>
+                Sto leggendo gli ultimi 30 messaggi con{' '}
+                <strong>{selectedChat ? chatLabel(selectedChat) : 'la conversazione selezionata'}</strong>
+                {selectedSession && <> · sessione <strong>{selectedSession.name}</strong></>}
+              </p>
+            </div>
+          )}
 
-      {!result && !analyzing && !error && selectedSessionId && (
-        <div className="aic-center-state">
-          <div className="aic-empty-icon"><Bot size={36} /></div>
-          <h3>Seleziona una conversazione</h3>
-          <p>Scegli la sessione e la chat da analizzare. L'AI produrrà un recap, il sentiment e le azioni consigliate sugli ultimi 30 messaggi.</p>
-        </div>
-      )}
+          {!result && !analyzing && !error && (
+            <div className="aic-empty">
+              <div className="aic-empty-visual">
+                <div className="aic-empty-circle"><Brain size={40} /></div>
+              </div>
+              <h3>Pronto per l'analisi</h3>
+              <p>
+                Seleziona una conversazione dalla lista a sinistra, poi clicca
+                <strong> Analizza 30 messaggi</strong> per ottenere recap, sentiment e azioni consigliate.
+              </p>
+              <div className="aic-steps">
+                <div className="aic-step"><span>1</span> Scegli sessione</div>
+                <ArrowRight size={14} className="aic-step-arrow" />
+                <div className="aic-step"><span>2</span> Scegli chat</div>
+                <ArrowRight size={14} className="aic-step-arrow" />
+                <div className="aic-step"><span>3</span> Analizza</div>
+              </div>
+            </div>
+          )}
 
-      {result && (
-        <AnalysisCard
-          result={result}
-          chatName={selectedChat ? chatLabel(selectedChat) : formatPhone(result.chatId)}
-        />
-      )}
+          {result && !analyzing && (
+            <AnalysisPanel
+              result={result}
+              chatName={selectedChat ? chatLabel(selectedChat) : formatPhone(result.chatId)}
+            />
+          )}
+        </main>
+      </div>
     </div>
   );
 }
