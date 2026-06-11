@@ -5,6 +5,7 @@ import { WhatsAppWebJsAdapter } from './adapters/whatsapp-web-js.adapter';
 import { PluginLoaderService, PluginType, IEnginePlugin, PluginManifest } from '../core/plugins';
 import { WhatsAppWebJsPlugin } from '../plugins/engines/whatsapp-web-js';
 import { createLogger } from '../common/services/logger.service';
+import { cleanAllSessionProfileLocks } from './utils/chromium-profile.util';
 
 export interface EngineCreateOptions {
   sessionId: string;
@@ -25,6 +26,9 @@ export class EngineFactory implements OnModuleInit {
   }
 
   async onModuleInit(): Promise<void> {
+    const sessionDataPath = this.configService.get<string>('engine.sessionDataPath') ?? './data/sessions';
+    cleanAllSessionProfileLocks(sessionDataPath);
+
     // Register built-in engine plugins
     await this.registerBuiltInEngines();
   }
