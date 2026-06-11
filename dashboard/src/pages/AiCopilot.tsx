@@ -1,53 +1,57 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Bot, Loader2, Copy, Check, MessageSquare, Clock,
-  ChevronDown, ChevronUp, Wifi, WifiOff, RefreshCw,
-  User, Sparkles, AlertCircle, BookOpen,
+  Wifi, WifiOff, RefreshCw, User, Sparkles, AlertCircle,
+  Search, Users, Smile, Meh, Frown, ListChecks, ChevronRight,
 } from 'lucide-react';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { useSessionsQuery, useSessionChatsQuery } from '../hooks/queries';
 import { PageHeader } from '../components/PageHeader';
+import type { ChatSummary } from '../services/api';
 import './AiCopilot.css';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-interface TriggerMessage {
-  id?: string;
-  from: string;
-  body: string;
-  type: string;
-  timestamp?: number;
+interface Sentiment {
+  label: string;
+  score: number;
+  rationale: string;
 }
 
-interface Suggestion {
+interface RecommendedAction {
+  action: string;
+  reason: string;
+  urgency: string;
+}
+
+interface SuggestedReply {
+  label: string;
+  text: string;
+  strategy: string;
+}
+
+interface ConversationAnalysis {
+  recap: string;
+  sentiment: Sentiment;
+  conversationStage?: string;
+  priority?: string;
+  recommendedActions: RecommendedAction[];
+  keyTopics?: string[];
+  suggestedReplies?: SuggestedReply[];
+}
+
+interface AnalysisResult {
   sessionId: string;
   chatId: string;
-  triggerMessage: TriggerMessage;
-  historyCount: number;
-  suggestion: string;
+  messageCount: number;
+  analysis: ConversationAnalysis;
   model: string;
   generatedAt: string;
 }
 
-interface ProcessingState {
-  sessionId: string;
-  chatId: string;
-  from: string;
-  body: string;
-  startedAt: string;
-}
-
-interface WsMessage {
-  type: 'suggestion' | 'processing' | 'error' | 'history';
-  data: Suggestion | ProcessingState | { chatId: string; error: string } | Suggestion[];
-}
-
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const AI_SERVICE_URL = import.meta.env.VITE_AI_SERVICE_URL || '';
-const AI_PATH_PREFIX = AI_SERVICE_URL || '/ai';
-const AI_WS_URL = AI_SERVICE_URL
-  ? AI_SERVICE_URL.replace(/^http/, 'ws')
-  : `ws://${window.location.host}/ai`;
+const AI_PATH_PREFIX = import.meta.env.VITE_AI_SERVICE_URL || '/ai';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -63,66 +67,39 @@ function formatDate(iso: string) {
 }
 
 function formatPhone(chatId: string) {
-  return '+' + chatId.replace('@c.us', '').replace('@g.us', '');
+  if (chatId.endsWith('@g.us')) return chatId.replace('@g.us', ' (gruppo)');
+  return '+' + chatId.replace('@c.us', '');
 }
 
-/**
- * Parse GPT markdown output into structured sections.
- */
-function parseSuggestion(text: string) {
-  const lines = text.split('\n');
-  const analysisLines: string[] = [];
-  const optionBlocks: { label: string; reply: string; strategy: string }[] = [];
-  let priority = '';
-  let mode: 'none' | 'analysis' | 'option' = 'none';
-  let currentOption: { label: string; reply: string; strategy: string } | null = null;
-
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (/analisi conversazione/i.test(line)) { mode = 'analysis'; continue; }
-    if (/suggerimenti risposta/i.test(line)) { mode = 'none'; continue; }
-    if (/priorit/i.test(line) && line.startsWith('⚡')) {
-      priority = line.replace(/^⚡\s*\*\*Priorità[^:]*:\*\*\s*/i, '').replace(/\*\*/g, '').trim();
-      continue;
-    }
-    if (line === '---' || line === '') continue;
-
-    if (mode === 'analysis') {
-      if (line) analysisLines.push(line.replace(/\*\*/g, ''));
-      continue;
-    }
-
-    const optionHeader = line.match(/\*\*Opzione\s+\d+\s*[-–]\s*([^:*]+)[:\*]/i);
-    if (optionHeader) {
-      if (currentOption) optionBlocks.push(currentOption);
-      currentOption = { label: optionHeader[1].trim(), reply: '', strategy: '' };
-      mode = 'option';
-      continue;
-    }
-
-    if (mode === 'option' && currentOption) {
-      const replyMatch = line.match(/^"(.+)"$/);
-      if (replyMatch) { currentOption.reply = replyMatch[1]; continue; }
-      if (line.startsWith('→')) { currentOption.strategy = line.replace(/^→\s*\*?/, '').replace(/\*$/, '').trim(); continue; }
-    }
-  }
-  if (currentOption) optionBlocks.push(currentOption);
-
-  return { analysis: analysisLines.join(' '), options: optionBlocks, priority, raw: text };
+function chatLabel(chat: ChatSummary) {
+  if (chat.name && !chat.name.includes('@')) return chat.name;
+  return formatPhone(chat.id);
 }
 
-function priorityColor(p: string) {
-  if (/alta/i.test(p)) return 'high';
-  if (/media/i.test(p)) return 'medium';
+function sentimentIcon(label: string) {
+  if (/positiv/i.test(label)) return <Smile size={16} />;
+  if (/negativ/i.test(label)) return <Frown size={16} />;
+  return <Meh size={16} />;
+}
+
+function sentimentClass(label: string) {
+  if (/positiv/i.test(label)) return 'positive';
+  if (/negativ/i.test(label)) return 'negative';
+  if (/misto/i.test(label)) return 'mixed';
+  return 'neutral';
+}
+
+function urgencyClass(u: string) {
+  if (/alta/i.test(u)) return 'high';
+  if (/media/i.test(u)) return 'medium';
   return 'low';
 }
 
-// ─── SuggestionCard ──────────────────────────────────────────────────────────
+// ─── Analysis Result Card ─────────────────────────────────────────────────────
 
-function SuggestionCard({ item }: { item: Suggestion }) {
-  const [expanded, setExpanded] = useState(true);
+function AnalysisCard({ result, chatName }: { result: AnalysisResult; chatName: string }) {
   const [copied, setCopied] = useState<string | null>(null);
-  const parsed = parseSuggestion(item.suggestion);
+  const { analysis } = result;
 
   const handleCopy = (text: string, key: string) => {
     navigator.clipboard.writeText(text).then(() => {
@@ -132,83 +109,114 @@ function SuggestionCard({ item }: { item: Suggestion }) {
   };
 
   return (
-    <div className="aic-card">
-      {/* Header */}
-      <div className="aic-card-header" onClick={() => setExpanded(e => !e)}>
+    <div className="aic-card aic-analysis-card">
+      <div className="aic-card-header">
         <div className="aic-avatar"><User size={14} /></div>
         <div className="aic-card-info">
-          <span className="aic-phone">{formatPhone(item.chatId)}</span>
+          <span className="aic-phone">{chatName}</span>
           <span className="aic-meta">
-            <BookOpen size={11} /> {item.historyCount} msg caricati
+            <BookOpenIcon count={result.messageCount} />
             <span className="aic-dot" />
-            <Clock size={11} /> {formatDate(item.generatedAt)}
+            <Clock size={11} /> {formatDate(result.generatedAt)}
           </span>
         </div>
-        {parsed.priority && (
-          <span className={`aic-priority aic-priority-${priorityColor(parsed.priority)}`}>
-            {parsed.priority.split('—')[0].trim()}
+        {analysis.priority && (
+          <span className={`aic-priority aic-priority-${urgencyClass(analysis.priority)}`}>
+            {analysis.priority}
           </span>
         )}
-        <button className="aic-toggle">{expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
       </div>
 
-      {/* Incoming message */}
-      <div className="aic-trigger">
-        <MessageSquare size={12} className="aic-trigger-icon" />
-        <span className="aic-trigger-text">{item.triggerMessage.body || `[${item.triggerMessage.type}]`}</span>
-      </div>
+      <div className="aic-body">
+        {/* Sentiment */}
+        {analysis.sentiment && (
+          <div className={`aic-sentiment aic-sentiment-${sentimentClass(analysis.sentiment.label)}`}>
+            <div className="aic-sentiment-header">
+              {sentimentIcon(analysis.sentiment.label)}
+              <span className="aic-sentiment-label">Sentiment: {analysis.sentiment.label}</span>
+              <span className="aic-sentiment-score">
+                {analysis.sentiment.score > 0 ? '+' : ''}{analysis.sentiment.score.toFixed(2)}
+              </span>
+            </div>
+            <p className="aic-sentiment-rationale">{analysis.sentiment.rationale}</p>
+          </div>
+        )}
 
-      {expanded && (
-        <div className="aic-body">
-          {/* Analysis */}
-          {parsed.analysis && (
-            <div className="aic-section aic-section-analysis">
-              <div className="aic-section-title"><Sparkles size={12} /> Analisi</div>
-              <p className="aic-analysis-text">{parsed.analysis}</p>
-            </div>
-          )}
-
-          {/* Reply options */}
-          {parsed.options.length > 0 ? (
-            <div className="aic-section">
-              <div className="aic-section-title"><MessageSquare size={12} /> Risposte suggerite</div>
-              <div className="aic-options">
-                {parsed.options.map((opt, i) => (
-                  <div key={i} className="aic-option">
-                    <div className="aic-option-top">
-                      <span className="aic-option-num">{i + 1}</span>
-                      <span className="aic-option-label">{opt.label}</span>
-                      <button
-                        className={`aic-copy-btn${copied === `opt-${item.generatedAt}-${i}` ? ' copied' : ''}`}
-                        onClick={() => handleCopy(opt.reply || opt.label, `opt-${item.generatedAt}-${i}`)}
-                        disabled={!opt.reply}
-                      >
-                        {copied === `opt-${item.generatedAt}-${i}`
-                          ? <><Check size={11} /> Copiato</>
-                          : <><Copy size={11} /> Copia</>}
-                      </button>
-                    </div>
-                    {opt.reply && <blockquote className="aic-reply">"{opt.reply}"</blockquote>}
-                    {opt.strategy && <p className="aic-strategy">💡 {opt.strategy}</p>}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="aic-section aic-section-raw">
-              <div className="aic-section-title"><Sparkles size={12} /> Suggerimento</div>
-              <pre className="aic-raw">{item.suggestion}</pre>
-              <button
-                className={`aic-copy-btn${copied === `raw-${item.generatedAt}` ? ' copied' : ''}`}
-                onClick={() => handleCopy(item.suggestion, `raw-${item.generatedAt}`)}
-              >
-                {copied === `raw-${item.generatedAt}` ? <><Check size={11} /> Copiato</> : <><Copy size={11} /> Copia tutto</>}
-              </button>
-            </div>
+        {/* Recap */}
+        <div className="aic-section aic-section-analysis">
+          <div className="aic-section-title"><Sparkles size={12} /> Recap conversazione</div>
+          <p className="aic-analysis-text">{analysis.recap}</p>
+          {analysis.conversationStage && (
+            <p className="aic-stage">Fase: <strong>{analysis.conversationStage}</strong></p>
           )}
         </div>
-      )}
+
+        {/* Key topics */}
+        {analysis.keyTopics && analysis.keyTopics.length > 0 && (
+          <div className="aic-topics">
+            {analysis.keyTopics.map((t, i) => (
+              <span key={i} className="aic-topic-tag">{t}</span>
+            ))}
+          </div>
+        )}
+
+        {/* Recommended actions */}
+        {analysis.recommendedActions?.length > 0 && (
+          <div className="aic-section">
+            <div className="aic-section-title"><ListChecks size={12} /> Azioni consigliate</div>
+            <div className="aic-actions">
+              {analysis.recommendedActions.map((act, i) => (
+                <div key={i} className="aic-action">
+                  <div className="aic-action-top">
+                    <ChevronRight size={14} />
+                    <span className="aic-action-text">{act.action}</span>
+                    <span className={`aic-urgency aic-urgency-${urgencyClass(act.urgency)}`}>
+                      {act.urgency}
+                    </span>
+                  </div>
+                  <p className="aic-action-reason">{act.reason}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Suggested replies */}
+        {analysis.suggestedReplies && analysis.suggestedReplies.length > 0 && (
+          <div className="aic-section">
+            <div className="aic-section-title"><MessageSquare size={12} /> Risposte suggerite</div>
+            <div className="aic-options">
+              {analysis.suggestedReplies.map((opt, i) => (
+                <div key={i} className="aic-option">
+                  <div className="aic-option-top">
+                    <span className="aic-option-num">{i + 1}</span>
+                    <span className="aic-option-label">{opt.label}</span>
+                    <button
+                      className={`aic-copy-btn${copied === `reply-${i}` ? ' copied' : ''}`}
+                      onClick={() => handleCopy(opt.text, `reply-${i}`)}
+                    >
+                      {copied === `reply-${i}`
+                        ? <><Check size={11} /> Copiato</>
+                        : <><Copy size={11} /> Copia</>}
+                    </button>
+                  </div>
+                  {opt.text && <blockquote className="aic-reply">"{opt.text}"</blockquote>}
+                  {opt.strategy && <p className="aic-strategy">💡 {opt.strategy}</p>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
+  );
+}
+
+function BookOpenIcon({ count }: { count: number }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+      <MessageSquare size={11} /> {count} messaggi analizzati
+    </span>
   );
 }
 
@@ -217,81 +225,86 @@ function SuggestionCard({ item }: { item: Suggestion }) {
 export function AiCopilot() {
   useDocumentTitle('AI Copilot');
 
-  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
-  const [processing, setProcessing] = useState<ProcessingState | null>(null);
-  const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
+  const { data: sessions = [], isLoading: sessionsLoading } = useSessionsQuery();
+  const readySessions = sessions.filter(s => s.status === 'ready');
+
+  const [selectedSessionId, setSelectedSessionId] = useState('');
+  const [selectedChatId, setSelectedChatId] = useState('');
+  const [chatSearch, setChatSearch] = useState('');
+
+  const { data: chats = [], isLoading: chatsLoading, refetch: refetchChats } = useSessionChatsQuery(
+    selectedSessionId,
+    !!selectedSessionId,
+  );
+
   const [serviceReachable, setServiceReachable] = useState<boolean | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const knownKeys = useRef<Set<string>>(new Set());
-
-  const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
-    setWsStatus('connecting');
-    const ws = new WebSocket(AI_WS_URL);
-    wsRef.current = ws;
-
-    ws.onopen = () => setWsStatus('connected');
-
-    ws.onmessage = (e) => {
-      try {
-        const msg: WsMessage = JSON.parse(e.data);
-        if (msg.type === 'history') {
-          const incoming = msg.data as Suggestion[];
-          const fresh = incoming.filter(s => !knownKeys.current.has(s.generatedAt));
-          fresh.forEach(s => knownKeys.current.add(s.generatedAt));
-          if (fresh.length > 0) setSuggestions(prev => [...fresh, ...prev].slice(0, 100));
-        } else if (msg.type === 'suggestion') {
-          const s = msg.data as Suggestion;
-          if (!knownKeys.current.has(s.generatedAt)) {
-            knownKeys.current.add(s.generatedAt);
-            setSuggestions(prev => [s, ...prev].slice(0, 100));
-          }
-          setProcessing(null);
-        } else if (msg.type === 'processing') {
-          setProcessing(msg.data as ProcessingState);
-        } else if (msg.type === 'error') {
-          setProcessing(null);
-        }
-      } catch {}
-    };
-
-    ws.onclose = () => {
-      setWsStatus('disconnected');
-      reconnectTimer.current = setTimeout(connect, 5000);
-    };
-    ws.onerror = () => ws.close();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [analyzing, setAnalyzing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<AnalysisResult | null>(null);
 
   useEffect(() => {
-    fetch(`${AI_PATH_PREFIX}/health`)
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then(() => { setServiceReachable(true); connect(); })
-      .catch(() => setServiceReachable(false));
-    return () => {
-      reconnectTimer.current && clearTimeout(reconnectTimer.current);
-      wsRef.current?.close();
-    };
-  }, [connect]);
+    if (!selectedSessionId && readySessions.length > 0) {
+      setSelectedSessionId(readySessions[0].id);
+    }
+  }, [readySessions, selectedSessionId]);
 
-  const handleRetry = () => {
+  useEffect(() => {
+    setSelectedChatId('');
+    setResult(null);
+    setError(null);
+  }, [selectedSessionId]);
+
+  const checkHealth = useCallback(() => {
     setServiceReachable(null);
     fetch(`${AI_PATH_PREFIX}/health`)
       .then(r => r.ok ? r.json() : Promise.reject())
-      .then(() => { setServiceReachable(true); connect(); })
+      .then(() => setServiceReachable(true))
       .catch(() => setServiceReachable(false));
+  }, []);
+
+  useEffect(() => { checkHealth(); }, [checkHealth]);
+
+  const filteredChats = chats.filter(c => {
+    if (!chatSearch.trim()) return true;
+    const q = chatSearch.toLowerCase();
+    return chatLabel(c).toLowerCase().includes(q)
+      || c.id.toLowerCase().includes(q)
+      || (c.lastMessage?.body || '').toLowerCase().includes(q);
+  });
+
+  const selectedChat = chats.find(c => c.id === selectedChatId);
+
+  const handleAnalyze = async () => {
+    if (!selectedSessionId || !selectedChatId) return;
+    setAnalyzing(true);
+    setError(null);
+    setResult(null);
+
+    try {
+      const res = await fetch(`${AI_PATH_PREFIX}/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: selectedSessionId, chatId: selectedChatId, limit: 30 }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setResult(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Errore durante l\'analisi');
+    } finally {
+      setAnalyzing(false);
+    }
   };
 
   if (serviceReachable === false) {
     return (
       <div className="aic-page">
-        <PageHeader title="AI Copilot" subtitle="Suggerimenti di risposta in tempo reale" />
+        <PageHeader title="AI Copilot" subtitle="Analisi conversazioni WhatsApp con recap, sentiment e azioni consigliate" />
         <div className="aic-center-state">
           <div className="aic-offline-icon"><WifiOff size={28} /></div>
           <h3>Servizio AI non raggiungibile</h3>
-          <p>Il processo non risponde su <code>/ai/health</code>.</p>
-          <pre className="aic-code-block">cd ai-service{'\n'}npm run dev</pre>
-          <button className="aic-btn-primary" onClick={handleRetry}><RefreshCw size={13} /> Riprova</button>
+          <p>Il servizio AI non risponde. Verifica che il container <code>ai-service</code> sia avviato.</p>
+          <button className="aic-btn-primary" onClick={checkHealth}><RefreshCw size={13} /> Riprova</button>
         </div>
       </div>
     );
@@ -299,50 +312,141 @@ export function AiCopilot() {
 
   return (
     <div className="aic-page">
-      <PageHeader title="AI Copilot" subtitle="Suggerimenti di risposta in tempo reale" />
+      <PageHeader title="AI Copilot" subtitle="Seleziona una conversazione e analizza gli ultimi 30 messaggi" />
 
       <div className="aic-statusbar">
-        <span className={`aic-dot-status aic-dot-${wsStatus}`} />
+        <span className={`aic-dot-status aic-dot-${serviceReachable ? 'connected' : 'connecting'}`} />
         <span className="aic-ws-label">
-          {wsStatus === 'connected' ? 'Live' : wsStatus === 'connecting' ? 'Connessione…' : 'Disconnesso'}
+          {serviceReachable ? 'AI Service attivo' : 'Connessione…'}
         </span>
-        {wsStatus === 'connecting' && <Loader2 size={11} className="animate-spin" />}
         <span className="aic-statusbar-sep" />
-        <Wifi size={11} /> <span>AI Service</span>
-        <span className="aic-statusbar-count">{suggestions.length} suggeriment{suggestions.length === 1 ? 'o' : 'i'}</span>
+        <Wifi size={11} /> <span>Analisi su richiesta</span>
       </div>
 
-      {processing && (
+      {/* Selectors */}
+      <div className="aic-selectors">
+        <div className="aic-selector-group">
+          <label className="aic-label">Sessione WhatsApp</label>
+          <select
+            className="aic-select"
+            value={selectedSessionId}
+            onChange={e => setSelectedSessionId(e.target.value)}
+            disabled={sessionsLoading}
+          >
+            <option value="">— Seleziona sessione —</option>
+            {readySessions.map(s => (
+              <option key={s.id} value={s.id}>
+                {s.name} {s.phone ? `(${s.phone})` : ''}
+              </option>
+            ))}
+          </select>
+          {readySessions.length === 0 && !sessionsLoading && (
+            <p className="aic-hint-inline"><AlertCircle size={12} /> Nessuna sessione attiva. Avvia una sessione prima.</p>
+          )}
+        </div>
+
+        {selectedSessionId && (
+          <div className="aic-selector-group aic-selector-chat">
+            <div className="aic-chat-header">
+              <label className="aic-label">Conversazione</label>
+              <button className="aic-refresh-btn" onClick={() => refetchChats()} disabled={chatsLoading}>
+                <RefreshCw size={12} className={chatsLoading ? 'animate-spin' : ''} />
+              </button>
+            </div>
+            <div className="aic-search">
+              <Search size={14} />
+              <input
+                type="text"
+                placeholder="Cerca conversazione…"
+                value={chatSearch}
+                onChange={e => setChatSearch(e.target.value)}
+              />
+            </div>
+            <div className="aic-chat-list">
+              {chatsLoading && (
+                <div className="aic-chat-loading"><Loader2 size={16} className="animate-spin" /> Caricamento…</div>
+              )}
+              {!chatsLoading && filteredChats.length === 0 && (
+                <p className="aic-chat-empty">Nessuna conversazione trovata</p>
+              )}
+              {filteredChats.map(chat => (
+                <button
+                  key={chat.id}
+                  className={`aic-chat-item${selectedChatId === chat.id ? ' selected' : ''}`}
+                  onClick={() => setSelectedChatId(chat.id)}
+                >
+                  <div className="aic-chat-item-icon">
+                    {chat.isGroup ? <Users size={14} /> : <User size={14} />}
+                  </div>
+                  <div className="aic-chat-item-info">
+                    <span className="aic-chat-item-name">{chatLabel(chat)}</span>
+                    {chat.lastMessage && (
+                      <span className="aic-chat-item-preview">
+                        {chat.lastMessage.fromMe ? 'Tu: ' : ''}{chat.lastMessage.body?.slice(0, 60)}
+                      </span>
+                    )}
+                  </div>
+                  {chat.unreadCount > 0 && (
+                    <span className="aic-chat-unread">{chat.unreadCount}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Analyze button */}
+      {selectedSessionId && selectedChatId && (
+        <div className="aic-analyze-bar">
+          <button
+            className="aic-btn-primary aic-btn-analyze"
+            onClick={handleAnalyze}
+            disabled={analyzing}
+          >
+            {analyzing
+              ? <><Loader2 size={14} className="animate-spin" /> Analisi in corso…</>
+              : <><Bot size={14} /> Analizza ultimi 30 messaggi</>}
+          </button>
+          {selectedChat && (
+            <span className="aic-analyze-target">
+              {chatLabel(selectedChat)}
+            </span>
+          )}
+        </div>
+      )}
+
+      {error && (
+        <div className="aic-error-banner">
+          <AlertCircle size={14} />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {analyzing && (
         <div className="aic-banner">
           <Loader2 size={13} className="animate-spin" />
           <div>
-            <strong>Analisi in corso</strong> · {formatPhone(processing.chatId)}
-            <span className="aic-banner-body"> "{processing.body?.slice(0, 80)}{(processing.body?.length ?? 0) > 80 ? '…' : ''}"</span>
+            <strong>Analisi in corso</strong> · {selectedChat ? chatLabel(selectedChat) : selectedChatId}
+            <span className="aic-banner-body"> Recupero cronologia e generazione recap…</span>
           </div>
         </div>
       )}
 
-      {serviceReachable === null && (
-        <div className="aic-center-state"><Loader2 size={28} className="animate-spin" /><span>Connessione…</span></div>
-      )}
-
-      {serviceReachable === true && suggestions.length === 0 && !processing && (
+      {!result && !analyzing && !error && selectedSessionId && (
         <div className="aic-center-state">
           <div className="aic-empty-icon"><Bot size={36} /></div>
-          <h3>In attesa di messaggi</h3>
-          <p>Quando arriverà un messaggio WhatsApp, l'AI analizzerà la conversazione e mostrerà le risposte suggerite.</p>
-          <div className="aic-hint">
-            <AlertCircle size={12} />
-            <span>Webhook: <code>url = http://localhost:3100/webhook</code>, evento: <code>message.received</code></span>
-          </div>
+          <h3>Seleziona una conversazione</h3>
+          <p>Scegli la sessione e la chat da analizzare. L'AI produrrà un recap, il sentiment e le azioni consigliate sugli ultimi 30 messaggi.</p>
         </div>
       )}
 
-      <div className="aic-list">
-        {suggestions.map((s, i) => (
-          <SuggestionCard key={`${s.generatedAt}-${i}`} item={s} />
-        ))}
-      </div>
+      {result && (
+        <AnalysisCard
+          result={result}
+          chatName={selectedChat ? chatLabel(selectedChat) : formatPhone(result.chatId)}
+        />
+      )}
     </div>
   );
 }

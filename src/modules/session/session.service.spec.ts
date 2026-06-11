@@ -8,6 +8,7 @@ import { EngineFactory } from '../../engine/engine.factory';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
+import { MessageService } from '../message/message.service';
 
 function createMockSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -98,6 +99,10 @@ describe('SessionService', () => {
         { provide: EventsGateway, useValue: eventsGateway },
         { provide: WebhookService, useValue: webhookService },
         { provide: HookManager, useValue: hookManager },
+        {
+          provide: MessageService,
+          useValue: { saveIncomingMessage: jest.fn() },
+        },
       ],
     }).compile();
 

@@ -264,6 +264,23 @@ export const auditApi = {
 // Message API
 // =============================================================================
 
+export interface ChatSummary {
+  id: string;
+  name: string;
+  isGroup: boolean;
+  unreadCount: number;
+  timestamp: number;
+  lastMessage?: {
+    body: string;
+    timestamp: number;
+    fromMe: boolean;
+  };
+}
+
+export const chatApi = {
+  list: (sessionId: string) => request<ChatSummary[]>(`/sessions/${sessionId}/chats`),
+};
+
 export const messageApi = {
   sendText: (sessionId: string, chatId: string, text: string) =>
     request<MessageResponse>(`/sessions/${sessionId}/messages/send-text`, {

@@ -5,6 +5,8 @@ import {
   BadRequestException,
   OnModuleDestroy,
   OnModuleInit,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, In, DataSource } from 'typeorm';
@@ -16,6 +18,8 @@ import { createLogger } from '../../common/services/logger.service';
 import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
+import { MessageService } from '../message/message.service';
+import { IncomingMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 
 interface ReconnectState {
   attempts: number;
@@ -43,6 +47,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
     private readonly eventsGateway: EventsGateway,
     private readonly webhookService: WebhookService,
     private readonly hookManager: HookManager,
+    @Inject(forwardRef(() => MessageService))
+    private readonly messageService: MessageService,
   ) {}
 
   /**
@@ -306,10 +312,25 @@ export class SessionService implements OnModuleDestroy, OnModuleInit {
               return;
             }
 
+            const msg = finalMessage as IncomingMessage;
+
+            // Persist incoming message for history and AI analysis
+            if (!msg.fromMe) {
+              void this.messageService.saveIncomingMessage(id, {
+                waMessageId: msg.id,
+                chatId: msg.chatId,
+                from: msg.from,
+                to: msg.to,
+                body: msg.body,
+                type: msg.type,
+                timestamp: msg.timestamp,
+              });
+            }
+
             // Dispatch to webhooks with potentially modified message
-            void this.webhookService.dispatch(id, 'message.received', finalMessage as Record<string, unknown>);
+            void this.webhookService.dispatch(id, 'message.received', msg as unknown as Record<string, unknown>);
             // Emit real-time event to WebSocket clients
-            this.eventsGateway.emitMessage(id, finalMessage as Record<string, unknown>);
+            this.eventsGateway.emitMessage(id, msg as unknown as Record<string, unknown>);
           });
       },
       onDisconnected: (reason: string): void => {

@@ -17,6 +17,16 @@ http:
       service: api
       priority: 100
 
+    # AI service router
+    ai:
+      rule: 'PathPrefix(`/ai`)'
+      entryPoints:
+        - web
+      service: ai
+      middlewares:
+        - ai-strip-prefix
+      priority: 90
+
     # Dashboard Router - catch-all for frontend (lowest priority)
     dashboard:
       rule: 'PathPrefix(`/`)'
@@ -25,11 +35,22 @@ http:
       service: dashboard
       priority: 1
 
+  middlewares:
+    ai-strip-prefix:
+      stripPrefix:
+        prefixes:
+          - '/ai'
+
   services:
     api:
       loadBalancer:
         servers:
           - url: 'http://openwa-api:2785'
+
+    ai:
+      loadBalancer:
+        servers:
+          - url: 'http://openwa-ai:3100'
 
     dashboard:
       loadBalancer:
