@@ -9,6 +9,8 @@ import { useRole } from '../hooks/useRole';
 import { PageHeader } from '../components/PageHeader';
 import './Sessions.css';
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 export function Sessions() {
   const { t } = useTranslation();
   useDocumentTitle(t('sessions.title'));
@@ -25,24 +27,13 @@ export function Sessions() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [startingId, setStartingId] = useState<string | null>(null);
+  const qrDataRef = useRef(qrData);
+  const qrRefreshInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+  const currentSessionName = useRef<string>('');
+  qrDataRef.current = qrData;
 
-  useWebSocket({
-    onSessionStatus: useCallback(
-      (event: { sessionId: string; status: string }) => {
-        setSessions(prev =>
-          prev.map(s => (s.id === event.sessionId ? { ...s, status: event.status as Session['status'] } : s)),
-        );
-        if (event.status === 'ready') {
-          toast.success(t('sessions.toasts.readyTitle'), t('sessions.toasts.readyDesc'));
-        } else if (event.status === 'disconnected') {
-          toast.warning(t('sessions.toasts.disconnectedTitle'), t('sessions.toasts.disconnectedDesc'));
-        }
-      },
-      [toast, t],
-    ),
-  });
-
-  const fetchSessions = async () => {
+  const fetchSessions = useCallback(async () => {
     try {
       setLoading(true);
       const data = await sessionApi.list();
@@ -52,37 +43,107 @@ export function Sessions() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [t]);
 
-  useEffect(() => {
-    fetchSessions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const qrRefreshInterval = useRef<ReturnType<typeof setInterval> | null>(null);
-  const currentSessionName = useRef<string>('');
-
-  const fetchQR = useCallback(async (sessionId: string) => {
+  const fetchQR = useCallback(async (sessionId: string, sessionName?: string) => {
     try {
       const qr = await sessionApi.getQR(sessionId);
-      setQrData({ sessionId, sessionName: currentSessionName.current, qrCode: qr.qrCode });
       if (qr.status === 'ready') {
         setQrData(null);
         currentSessionName.current = '';
         fetchSessions();
+        return;
+      }
+      if (qr.qrCode) {
+        setQrData({
+          sessionId,
+          sessionName: sessionName || currentSessionName.current,
+          qrCode: qr.qrCode,
+        });
       }
     } catch {
+      // Transient errors during polling are ignored
+    }
+  }, [fetchSessions]);
+
+  const waitForQR = useCallback(
+    async (sessionId: string, sessionName: string) => {
+      currentSessionName.current = sessionName;
+      setQrData({ sessionId, sessionName, qrCode: '' });
+
+      for (let attempt = 0; attempt < 30; attempt++) {
+        try {
+          const qr = await sessionApi.getQR(sessionId);
+          if (qr.status === 'ready') {
+            setQrData(null);
+            currentSessionName.current = '';
+            fetchSessions();
+            return;
+          }
+          if (qr.qrCode) {
+            setQrData({ sessionId, sessionName, qrCode: qr.qrCode });
+            return;
+          }
+        } catch (err) {
+          if (err instanceof Error && err.message.includes('already authenticated')) {
+            setQrData(null);
+            fetchSessions();
+            return;
+          }
+          if (err instanceof Error && err.message.includes('not started')) {
+            break;
+          }
+        }
+        await sleep(2000);
+      }
+
+      toast.error(t('sessions.qr.errorTitle'), t('sessions.qr.unavailable'));
       setQrData(null);
       currentSessionName.current = '';
-      fetchSessions();
-    }
-  }, []);
+    },
+    [fetchSessions, t, toast],
+  );
+
+  useWebSocket({
+    onSessionStatus: useCallback(
+      (event: { sessionId: string; status: string }) => {
+        setSessions(prev =>
+          prev.map(s => (s.id === event.sessionId ? { ...s, status: event.status as Session['status'] } : s)),
+        );
+        if (event.status === 'qr_ready' && qrDataRef.current?.sessionId === event.sessionId) {
+          void fetchQR(event.sessionId);
+        }
+        if (event.status === 'ready') {
+          if (qrDataRef.current?.sessionId === event.sessionId) {
+            setQrData(null);
+            currentSessionName.current = '';
+          }
+          toast.success(t('sessions.toasts.readyTitle'), t('sessions.toasts.readyDesc'));
+        } else if (event.status === 'disconnected') {
+          toast.warning(t('sessions.toasts.disconnectedTitle'), t('sessions.toasts.disconnectedDesc'));
+        }
+      },
+      [fetchQR, toast, t],
+    ),
+    onQRCode: useCallback((event: { sessionId: string; qrCode: string }) => {
+      setQrData(prev => {
+        if (prev?.sessionId === event.sessionId) {
+          return { ...prev, qrCode: event.qrCode };
+        }
+        return prev;
+      });
+    }, []),
+  });
 
   useEffect(() => {
-    if (qrData) {
+    void fetchSessions();
+  }, [fetchSessions]);
+
+  useEffect(() => {
+    if (qrData?.qrCode) {
       currentSessionName.current = qrData.sessionName;
       qrRefreshInterval.current = setInterval(() => {
-        fetchQR(qrData.sessionId);
+        void fetchQR(qrData.sessionId, qrData.sessionName);
       }, 5000);
     }
     return () => {
@@ -127,36 +188,35 @@ export function Sessions() {
   };
 
   const handleStart = async (id: string) => {
+    if (startingId === id) return;
+
     const session = sessions.find(s => s.id === id);
-    if (session && ['initializing', 'connecting', 'qr_ready'].includes(session.status)) {
-      handleShowQR(id);
+    const sessionName = session?.name || '';
+
+    if (session && ['initializing', 'connecting', 'qr_ready', 'authenticating'].includes(session.status)) {
+      await waitForQR(id, sessionName);
       return;
     }
 
+    setStartingId(id);
     try {
       await sessionApi.start(id);
-      setSessions(sessions.map(s => (s.id === id ? { ...s, status: 'connecting' } : s)));
+      setSessions(prev => prev.map(s => (s.id === id ? { ...s, status: 'initializing' } : s)));
       await fetchSessions();
-      handleShowQR(id);
+      await waitForQR(id, sessionName);
     } catch (err) {
       console.error('Failed to start:', err);
       await fetchSessions();
-      if (err instanceof Error && err.message.includes('already started')) {
-        handleShowQR(id);
-      }
+      const msg = err instanceof Error ? err.message : t('sessions.start.errorDefault');
+      toast.error(t('sessions.start.errorTitle'), msg);
+    } finally {
+      setStartingId(null);
     }
   };
 
   const handleShowQR = async (id: string) => {
     const session = sessions.find(s => s.id === id);
-    const sessionName = session?.name || '';
-    try {
-      const qr = await sessionApi.getQR(id);
-      setQrData({ sessionId: id, sessionName, qrCode: qr.qrCode });
-    } catch (err) {
-      console.error('Failed to get QR:', err);
-      setError(t('sessions.qr.unavailable'));
-    }
+    await waitForQR(id, session?.name || '');
   };
 
   const handleStop = async (id: string) => {
@@ -450,9 +510,9 @@ export function Sessions() {
                   <button
                     className="btn-sm"
                     onClick={() => handleShowQR(session.id)}
-                    disabled={session.status !== 'qr_ready'}
+                    disabled={startingId === session.id}
                   >
-                    {session.status === 'qr_ready' ? t('sessions.qr.showQr') : t('sessions.qr.loading')}
+                    {startingId === session.id ? t('sessions.qr.loading') : t('sessions.qr.showQr')}
                   </button>
                 </div>
               ) : (
@@ -478,10 +538,10 @@ export function Sessions() {
                   {t('sessions.actions.view')}
                 </button>
                 {canWrite &&
-                (session.status === 'created' || session.status === 'idle' || session.status === 'disconnected') ? (
-                  <button className="btn-action" onClick={() => handleStart(session.id)}>
-                    <Play size={16} />
-                    {t('sessions.actions.start')}
+                (session.status === 'created' || session.status === 'idle' || session.status === 'disconnected' || session.status === 'failed') ? (
+                  <button className="btn-action" onClick={() => handleStart(session.id)} disabled={startingId === session.id}>
+                    {startingId === session.id ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+                    {startingId === session.id ? t('sessions.qr.loading') : t('sessions.actions.start')}
                   </button>
                 ) : canWrite && ['ready', 'initializing', 'connecting', 'qr_ready'].includes(session.status) ? (
                   <button className="btn-action" onClick={() => handleStop(session.id)}>

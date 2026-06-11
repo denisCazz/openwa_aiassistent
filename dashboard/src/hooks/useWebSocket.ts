@@ -25,20 +25,32 @@ interface WebSocketEvents {
   onMessage?: (event: MessageEvent) => void;
 }
 
+interface WSEventMessage {
+  type: 'event';
+  payload: {
+    event: string;
+    sessionId: string;
+    data: Record<string, unknown>;
+  };
+  timestamp: string;
+}
+
 // Use current origin for WebSocket (goes through nginx proxy in Docker)
-// Falls back to env var or localhost for development
 const SOCKET_URL = import.meta.env.VITE_WS_URL || window.location.origin;
 
 export function useWebSocket(events: WebSocketEvents = {}) {
   const socketRef = useRef<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const eventsRef = useRef(events);
+
+  useEffect(() => {
+    eventsRef.current = events;
+  }, [events]);
 
   const connect = useCallback(() => {
     if (socketRef.current?.connected) return;
 
-    // Get API key from sessionStorage (same as api.ts)
     const apiKey = sessionStorage.getItem('openwa_api_key');
-
     if (!apiKey) {
       console.warn('[WebSocket] No API key found, skipping connection');
       return;
@@ -49,29 +61,61 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
-      auth: {
-        apiKey,
-      },
-      extraHeaders: {
-        'X-API-Key': apiKey,
-      },
-      query: {
-        apiKey,
-      },
+      auth: { apiKey },
+      extraHeaders: { 'X-API-Key': apiKey },
+      query: { apiKey },
     });
 
-    socketRef.current.on('connect', () => {
+    const socket = socketRef.current;
+
+    socket.on('connect', () => {
       console.log('[WebSocket] Connected');
       setIsConnected(true);
+      socket.emit('message', {
+        type: 'subscribe',
+        sessionId: '*',
+        events: ['session.status', 'session.qr', 'message.received'],
+      });
     });
 
-    socketRef.current.on('disconnect', () => {
+    socket.on('disconnect', () => {
       console.log('[WebSocket] Disconnected');
       setIsConnected(false);
     });
 
-    socketRef.current.on('connect_error', error => {
+    socket.on('connect_error', error => {
       console.warn('[WebSocket] Connection error:', error.message);
+    });
+
+    socket.on('message', (message: WSEventMessage) => {
+      if (message.type !== 'event') return;
+
+      const { event, sessionId, data } = message.payload;
+      const timestamp = message.timestamp;
+
+      if (event === 'session.status' && eventsRef.current.onSessionStatus) {
+        eventsRef.current.onSessionStatus({
+          sessionId,
+          status: String(data.status ?? ''),
+          timestamp,
+        });
+      }
+
+      if (event === 'session.qr' && eventsRef.current.onQRCode && typeof data.qrCode === 'string') {
+        eventsRef.current.onQRCode({
+          sessionId,
+          qrCode: data.qrCode,
+          timestamp,
+        });
+      }
+
+      if (event === 'message.received' && eventsRef.current.onMessage) {
+        eventsRef.current.onMessage({
+          sessionId,
+          message: data,
+          timestamp,
+        });
+      }
     });
   }, []);
 
@@ -85,31 +129,6 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       }
     };
   }, [connect]);
-
-  // Register event handlers
-  useEffect(() => {
-    if (!socketRef.current) return;
-
-    const socket = socketRef.current;
-
-    if (events.onSessionStatus) {
-      socket.on('session:status', events.onSessionStatus);
-    }
-
-    if (events.onQRCode) {
-      socket.on('session:qr', events.onQRCode);
-    }
-
-    if (events.onMessage) {
-      socket.on('session:message', events.onMessage);
-    }
-
-    return () => {
-      socket.off('session:status');
-      socket.off('session:qr');
-      socket.off('session:message');
-    };
-  }, [events.onSessionStatus, events.onQRCode, events.onMessage]);
 
   return { isConnected };
 }
